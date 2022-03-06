@@ -25,89 +25,64 @@
 ; CONFIG2
   CONFIG  BOR4V = BOR40V        ; Brown-out Reset Selection bit (Brown-out Reset set to 4.0V)
   CONFIG  WRT = OFF             ; Flash Program Memory Self Write Enable bits (Write protection off)
-
-// config statements should precede project file includes.
-#include <xc.inc>
   
-; -------------- MACROS --------------- 
-  ; Macro para reiniciar el valor del TMR0
-  ; *Recibe el valor a configurar en TMR_VAR*
-  RESET_TMR1 MACRO TMR1_H, TMR1_L
-    MOVLW   TMR1_H
-    MOVWF   TMR1H	    ; 50ms retardo
-    MOVLW   TMR1_L	    ; limpiamos bandera de interrupción
-    MOVWF   TMR1L
-    BCF	    TMR1IF
-    ENDM
   
 ; ------- VARIABLES EN MEMORIA --------
 PSECT udata_shr		    ; Memoria compartida
-    W_TEMP:		DS 1
-    STATUS_TEMP:	DS 1
-PSECT udata_bank0	    ;banco de variables
-    segundos:      DS 1
+    tempw:		DS 1
+    temp_status:	DS 1
+   
 PSECT resVect, class=CODE, abs, delta=2
 ORG 00h			    ; posición 0000h para el reset
 ;------------ VECTOR RESET --------------
 resetVec:
-    PAGESEL MAIN	    ; Cambio de pagina
-    GOTO    MAIN
+    PAGESEL main	    ; Cambio de pagina
+    GOTO    main
     
 PSECT intVect, class=CODE, abs, delta=2
 ORG 04h			    ; posición 0004h para interrupciones
 ;------- VECTOR INTERRUPCIONES ----------
-PUSH:
-    MOVWF   W_TEMP	    ; Guardamos W
+push:
+    MOVWF   tempw	    ; Guardamos W
     SWAPF   STATUS, W
-    MOVWF   STATUS_TEMP	    ; Guardamos STATUS
+    MOVWF   temp_status    ; Guardamos STATUS
     
-ISR:
+isr:
     
-    BTFSC   TMR1IF
-    CALL    AUMENTO
+    BTFSC  TMR2IF
+    CALL   aumentar
     
-    ;--------------------------------------------------------------------
-    ; En caso de tener habilitadas varias interrupciones hay que evaluarel estado de todas las banderas de las interrupciones habilitadas
-    ;	para identificar que interrupción fue la que se activó.
-    
-    ;BTFSC   T0IF	    ; Fue interrupción del TMR0? No=0 Si=1
-    ;CALL    INT_TMR0	    ; Si -> Subrutina o macro con codigo a ejecutar
-			    ;	cuando se active interrupción de TMR0
-    
-    ;BTFSC   RBIF	    ; Fue interrupción del PORTB? No=0 Si=1
-    ;CALL    INT_PORTB	    ; Si -> Subrutina o macro con codigo a ejecutar
-			    ;	cuando se active interrupción de PORTB
-    ;---------------------------------------------------------------------
-    
-POP:
-    SWAPF   STATUS_TEMP, W  
+pop:
+    SWAPF   temp_status, W  
     MOVWF   STATUS	    ; Recuperamos el valor de reg STATUS
-    SWAPF   W_TEMP, F	    
-    SWAPF   W_TEMP, W	    ; Recuperamos valor de W
+    SWAPF   tempw, F	    
+    SWAPF   tempw, W	    ; Recuperamos valor de W
     RETFIE		    ; Regresamos a ciclo principal
     
-AUMENTO:
-    RESET_TMR1 0x0B, 0xCD
-    INCF segundos
-    MOVF segundos, W
-    MOVWF  PORTC
+aumentar:
+    BCF  TMR2IF
+    MOVLW 0x01
+    XORWF PORTD
     RETURN
+    
 PSECT code, delta=2, abs
 ORG 100h		    ; posición 100h para el codigo
+ 
 ;------------- CONFIGURACION ------------
-MAIN:
-    CALL    CONFIG_IO	    ; Configuración de I/O
-    CALL    CONFIG_RELOJ    ; Configuración de Oscilador
-    CALL    CONFIG_TMR1	    ; Configuración de TMR0
-    CALL    CONFIG_INT	    ; Configuración de interrupciones
-    BANKSEL PORTC	    ; Cambio a banco 00
+main:
+    CALL    configio	    ; Configuración de I/O
+    CALL    configwatch    ; Configuración de Oscilador
+    CALL    configtmr2   ; Configuración de TMR0
+    CALL    configint	    ; Configuración de interrupciones
+    BANKSEL PORTD	    ; Cambio a banco 00
     
-LOOP:
+loop:
     ; Código que se va a estar ejecutando mientras no hayan interrupciones
-    GOTO    LOOP	    
+    GOTO   loop	    
     
 ;------------- SUBRUTINAS ---------------
-CONFIG_RELOJ:
+    
+configwatch:
     BANKSEL OSCCON	    ; cambiamos a banco 1
     BSF	    OSCCON, 0	    ; SCS -> 1, Usamos reloj interno
     BSF	    OSCCON, 6
@@ -116,42 +91,38 @@ CONFIG_RELOJ:
     RETURN
     
 ; Configuramos el TMR0 para obtener un retardo de 50ms
-CONFIG_TMR1:
-    BANKSEL T1CON	    ; cambiamos de banco
-    BCF	    TMR1GE	    ; TMR1 Siempre cuenta
-    BSF	    T1CKPS1		    ; prescaler a TMR1
-    BSF	    T1CKPS0		    ; PS<2:0> -> 11 prescaler 1 : 8
-    BCF	    T1OSCEN		    ; OSC tmr1 desactivado
-    BCF	    TMR1CS
-    BSF	    TMR1ON
+configtmr2:
+    BANKSEL PR2
+    MOVLW   244
+    MOVWF   PR2	    ; 500ms retardo
+    BANKSEL T2CON	    ; cambiamos de banco
+    BSF	    T2CKPS1		    ; prescaler a TMR2
+    BSF	    T2CKPS0		    ; PS<1:0> -> 1x prescaler 1 : 16
     
-    RESET_TMR1 0x0B, 0xCD
-    RETURN 
-
-; Cada vez que se cumple el tiempo del TMR0 es necesario reiniciarlo.
-; * Comentado porque lo cambiamos de subrutina a macro *
-/*RESET_TMR0:
-    BANKSEL TMR0	    ; cambiamos de banco
-    MOVLW   61
-    MOVWF   TMR0	    ; 50ms retardo
-    BCF	    T0IF	    ; limpiamos bandera de interrupción
-    return*/
+    BSF	    TOUTPS3		    ; TMR2 postscaler 
+    BSF	    TOUTPS2
+    BSF	    TOUTPS1
+    BSF	    TOUTPS0		    ; PS<3:0> 1111 postescaler 1:16
+    BSF	    TMR2ON		    ; Enciende el TMR2
     
- CONFIG_IO:
+   RETURN 
+ configio:
     BANKSEL ANSEL
     CLRF    ANSEL
     CLRF    ANSELH	        ; I/O digitales
     BANKSEL TRISD
-    CLRF    TRISC	    ; PORTC como salida
-    BANKSEL PORTC
-    CLRF    PORTC	    ; Apagamos PORTC
+    CLRF    TRISD	    ; PORTD como salida
+    BANKSEL PORTD
+    CLRF    PORTD	    ; Apagamos PORTD
     RETURN
     
-CONFIG_INT:
+configint:
     BANKSEL PIE1 
-    BSF	    TMR1IE
+    BSF	    TMR2IE
     BANKSEL INTCON
     BSF	    PEIE	    ; Habilitamos interrupciones
     BSF	    GIE		    ; Habilitamos interrupcion TMR0
-    BCF	    TMR1IF
+    BCF	    TMR2IF
     RETURN
+    
+END
